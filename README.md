@@ -48,7 +48,7 @@ const S3_ACCOUNT_ID = '[YOUR_S3_ACCOUNT_ID]';
 This is the default mode. The script will only transfer folders that have been updated since the `MINIMUM_DATE`.
 
 1.  Set the **MINIMUM\_DATE** constant to your desired start date.
-2.  Run the script: `npx ts-node sync-templates.ts`.
+2.  Run the script: `npx ts-node gcp-r2-migration.ts`.
 
 **Full Migration**
 If you want to migrate all folders within a specified `GCP_INTERNAL_PATH`, you can easily bypass the date-based filtering.
