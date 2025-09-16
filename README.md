@@ -26,7 +26,7 @@ Before running this script, ensure you have the following:
 
 ### **Configuration**
 
-Open the `gcp-r2-migration.js` file and update the following constants with your specific project details.
+Open the `gcp-r2-migration.ts` file and update the following constants with your specific project details.
 
 ```typescript
 // GCS Bucket & Internal Path
