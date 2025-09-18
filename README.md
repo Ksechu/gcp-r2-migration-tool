@@ -58,7 +58,32 @@ If you want to migrate all folders within a specified `GCP_INTERNAL_PATH`, you c
 
 -----
 
-### **Troubleshooting**
+### Troubleshooting
 
-  * **404 Errors on Public URL**: Ensure your R2 bucket's **Block Public Access** settings are configured correctly and the bucket has a public access policy.
-  * **`ERR_HTTP_INVALID_HEADER_VALUE`**: This error is typically resolved by the current script's logic, which downloads the full file buffer before uploading. If it persists, check your network connection or the file integrity.
+**404 Errors on a Public URL**: Ensure the R2 container's Public Access settings are configured correctly and a public access policy is set for the container.
+
+**ERR_HTTP_INVALID_HEADER_VALUE**: This error is typically resolved by the current script's logic, which downloads the file's entire buffer before uploading. If the error persists, check your network connection or the file's integrity.
+
+---
+
+### TypeError: Cannot read properties of null (reading 'length')
+
+This error occurs during a file download from GCP. It indicates a **compatibility issue** between your **Node.js** version and the **@google-cloud/storage** library, not a corrupted file. This bug can manifest **intermittently**, causing the script to work for some people and fail for others.
+
+#### **Solution**
+
+1.  **Update Your Script.** Make sure you are using the latest version of the script. It includes **retry logic** and safe buffer handling, which resolves the issue for most cases.
+
+2.  **Check Your Node.js Version.** This error often appears on specific Node.js versions, such as certain builds of v18. Find your current version by running this command in your terminal:
+    ```bash
+    node -v
+    ```
+
+3.  **Switch to a Stable Version.** The most reliable solution is to switch to a recent Node.js LTS (Long-Term Support) version where this bug is confirmed to be fixed. We recommend using **Node.js v20**.
+
+    -   Use **nvm** (Node Version Manager) for easy version switching.
+        ```bash
+        nvm install 20
+        nvm use 20
+        ```
+    -   After switching to the new version, re-run your script.
