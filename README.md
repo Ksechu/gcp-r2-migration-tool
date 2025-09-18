@@ -81,7 +81,7 @@ This error occurs during a file download from GCP. It indicates a **compatibilit
 #### **Solution**
 
 1.  **Update Your Script.** Make sure you are using the latest version of the script. It includes **retry logic** and safe buffer handling, which resolves the issue for most cases.
-2.  **Check Your Node.js Version.** This error often appears on specific Node.js versions, such as certain builds of v18. Find your current version by running this command in your terminal:
+2.  **Check Your Node.js Version.** This error often appears on specific Node.js versions, such as certain builds of v20/22. Find your current version by running this command in your terminal:
     ```bash
     node -v
     ```
