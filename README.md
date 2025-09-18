@@ -10,6 +10,16 @@ A versatile Node.js script to automate the migration of content from Google Clou
   * **Real-time Feedback**: Provides detailed console logs, including progress tracking for both individual files and the total number of folders migrated.
   * **Highly Configurable**: All cloud credentials, bucket names, and internal paths are managed as constants at the top of the file, making it easy to adapt the script for different projects.
 
+-----
+
+#### **Updated: 18.09.2025**
+
+  * **Improved Idempotency**: The script now performs a file-level check, comparing GCP and R2 file lists to sync only missing or new files within a folder.
+  * **Concurrency**: The script can transfer multiple files simultaneously, significantly speeding up the migration process for large folders.
+  * **Resilience**: The tool automatically retries failed file downloads and gracefully handles errors without crashing, ensuring a robust migration.
+
+-----
+
 ### **Prerequisites**
 
 Before running this script, ensure you have the following:
@@ -19,7 +29,7 @@ Before running this script, ensure you have the following:
 3.  **Cloudflare R2 API Tokens**: An Access Key ID and Secret Access Key with write permissions for your R2 bucket.
 4.  **Dependencies**: Install the necessary Node.js packages by running the following command in your terminal:
     ```bash
-    npm install @google-cloud/storage @aws-sdk/client-s3
+    npm install @google-cloud/storage @aws-sdk/client-s3 p-limit
     ```
 
 -----
@@ -62,28 +72,23 @@ If you want to migrate all folders within a specified `GCP_INTERNAL_PATH`, you c
 
 **404 Errors on a Public URL**: Ensure the R2 container's Public Access settings are configured correctly and a public access policy is set for the container.
 
-**ERR_HTTP_INVALID_HEADER_VALUE**: This error is typically resolved by the current script's logic, which downloads the file's entire buffer before uploading. If the error persists, check your network connection or the file's integrity.
+**ERR\_HTTP\_INVALID\_HEADER\_VALUE**: This error is typically resolved by the current script's logic, which downloads the file's entire buffer before uploading. If the error persists, check your network connection or the file's integrity.
 
----
-
-### TypeError: Cannot read properties of null (reading 'length')
+**TypeError: Cannot read properties of null (reading 'length')**
 
 This error occurs during a file download from GCP. It indicates a **compatibility issue** between your **Node.js** version and the **@google-cloud/storage** library, not a corrupted file. This bug can manifest **intermittently**, causing the script to work for some people and fail for others.
 
 #### **Solution**
 
 1.  **Update Your Script.** Make sure you are using the latest version of the script. It includes **retry logic** and safe buffer handling, which resolves the issue for most cases.
-
 2.  **Check Your Node.js Version.** This error often appears on specific Node.js versions, such as certain builds of v18. Find your current version by running this command in your terminal:
     ```bash
     node -v
     ```
-
 3.  **Switch to a Stable Version.** The most reliable solution is to switch to a recent Node.js LTS (Long-Term Support) version where this bug is confirmed to be fixed. We recommend using **Node.js v20**.
-
-    -   Use **nvm** (Node Version Manager) for easy version switching.
+      - Use **nvm** (Node Version Manager) for easy version switching.
         ```bash
         nvm install 20
         nvm use 20
         ```
-    -   After switching to the new version, re-run your script.
+      - After switching to the new version, re-run your script.
