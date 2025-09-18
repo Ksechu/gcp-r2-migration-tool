@@ -13,6 +13,7 @@
 
 import { Storage } from '@google-cloud/storage';
 import { S3Client, PutObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
+import pLimit from 'p-limit';
 
 // -----------------------------------------------------------------------------------
 // General Configuration
@@ -23,12 +24,9 @@ const GCP_BUCKET_NAME = '[YOUR_GCP_BUCKET_NAME]';
 const GCP_INTERNAL_PATH = '[YOUR_GCP_INTERNAL_PATH]';
 
 // This is the name of the file used to check the folder's creation/update date.
-// If you want to migrate all folders, regardless of date, you can remove this constant
-// and its related date-checking logic in the 'findAndProcessRecentFolders' function.
 const FOLDER_DATE_CHECK_FILE = '[FOLDER_DATE]';
 
 // The script will only migrate folders that were created on or after this date.
-// Set to a past date (e.g., '2000-01-01T00:00:00Z') to migrate everything.
 const MINIMUM_DATE = new Date('2025-03-10T00:00:00Z');
 
 // This controls how many files are fetched from GCP in a single request.
@@ -59,6 +57,9 @@ const s3 = new S3Client({
     secretAccessKey: S3_SECRET_ACCESS_KEY,
   },
 });
+
+// Controls the number of concurrent file uploads. Adjust based on your network and CPU.
+const limit = pLimit(8);
 
 async function findAndProcessRecentFolders(): Promise<void> {
   try {
@@ -143,64 +144,103 @@ async function findAndProcessRecentFolders(): Promise<void> {
     for (const folderName of finalFolders) {
       console.log(`\n➡️ Starting migration for folder: ${folderName}`);
 
-      // 1. Check if the folder already exists in S3 to prevent duplicate transfers.
-      const listParams = {
-        Bucket: S3_BUCKET_NAME,
-        Prefix: `${GCP_INTERNAL_PATH}${folderName}/`,
-        MaxKeys: 1,
-      };
-      const listCommand = new ListObjectsV2Command(listParams);
-      const listResponse = await s3.send(listCommand);
+      // 1. Get a list of all files in the R2 folder to find what's already there
+      const r2Files: Set<string> = new Set();
+      let r2ContinuationToken: string | undefined;
 
-      if (listResponse.Contents && listResponse.Contents.length > 0) {
-        console.log(`   ❌ Folder '${folderName}' already exists in S3. Skipping.`);
-        migratedFoldersCount++;
-        const remainingFolders = totalFoldersToMigrate - migratedFoldersCount;
-        console.log(`   ✨ Folders migrated: ${migratedFoldersCount}/${totalFoldersToMigrate} (Remaining: ${remainingFolders})`);
-        continue;
-      }
-
-      console.log(`   ✅ Folder '${folderName}' not found in S3. Starting transfer...`);
-
-      // 2. Get the list of all files in the folder from GCP.
-      const [gcpFiles] = await gcpBucket.getFiles({ prefix: `${GCP_INTERNAL_PATH}${folderName}/` });
-      console.log(`   📂 Found ${gcpFiles.length} files to transfer.`);
-
-      if (gcpFiles.length === 0) {
-        console.log('   ⚠️ Folder is empty, no transfer required.');
-        migratedFoldersCount++;
-        const remainingFolders = totalFoldersToMigrate - migratedFoldersCount;
-        console.log(`   ✨ Folders migrated: ${migratedFoldersCount}/${totalFoldersToMigrate} (Remaining: ${remainingFolders})`);
-        continue;
-      }
-
-      // 3. Upload each file to S3.
-      let transferredCount = 0;
-      const totalFiles = gcpFiles.length;
-
-      for (const file of gcpFiles) {
-        // Use the full file path from GCP as the S3 object key to preserve the folder structure.
-        const s3Key = file.name;
-
-        // Download the file into a buffer before uploading to S3 to avoid streaming issues.
-        const fileBuffer = await file.download();
-
-        const uploadParams = {
+      do {
+        const listParams = {
           Bucket: S3_BUCKET_NAME,
-          Key: s3Key,
-          Body: fileBuffer[0],
-          ContentType: file.metadata.contentType,
+          Prefix: `${GCP_INTERNAL_PATH}${folderName}/`,
         };
+        const listCommand = new ListObjectsV2Command(listParams);
+        const listResponse = await s3.send(listCommand);
 
-        await s3.send(new PutObjectCommand(uploadParams));
+        if (listResponse.Contents) {
+          listResponse.Contents.forEach(item => {
+            if (item.Key) {
+              r2Files.add(item.Key);
+            }
+          });
+        }
+        r2ContinuationToken = listResponse.NextContinuationToken;
+      } while (r2ContinuationToken);
 
-        transferredCount++;
-        console.log(`   ✔️ File transferred (${transferredCount}/${totalFiles}): ${s3Key}`);
+      console.log(`   ✅ Found ${r2Files.size} existing files in R2 for this folder.`);
+
+      // 2. Get the list of all files in the GCP folder
+      const [gcpFiles] = await gcpBucket.getFiles({ prefix: `${GCP_INTERNAL_PATH}${folderName}/` });
+
+      // 3. Filter out files that already exist in R2
+      const filesToMigrate = gcpFiles.filter(file => {
+        return !r2Files.has(file.name);
+      });
+
+      console.log(`   📂 Found ${gcpFiles.length} files in GCP. Migrating ${filesToMigrate.length} new or updated files.`);
+
+      if (filesToMigrate.length === 0) {
+        console.log('   ⚠️ Folder is fully synced, no new files to transfer.');
+        migratedFoldersCount++;
+        const remainingFolders = totalFoldersToMigrate - migratedFoldersCount;
+        console.log(`   ✨ Folders migrated: ${migratedFoldersCount}/${totalFoldersToMigrate} (Remaining: ${remainingFolders})`);
+        continue;
       }
+
+      // 4. Upload each missing file to S3
+      let transferredCount = 0;
+      const totalFilesToTransfer = filesToMigrate.length;
+
+      const uploadPromises = filesToMigrate.map(file => {
+        return limit(async () => {
+          const s3Key = file.name;
+          let fileBuffer;
+          let downloadSuccess = false;
+
+          // New Logic: Retry mechanism for file download
+          for (let i = 0; i < 3; i++) { // Try up to 3 times
+            try {
+              [fileBuffer] = await file.download();
+
+              // Explicitly check the downloaded buffer for integrity.
+              if (!fileBuffer) {
+                throw new Error('Downloaded buffer is null or undefined.');
+              }
+              downloadSuccess = true;
+              break; // Success, exit retry loop
+            } catch (e) {
+              console.log(`   ⚠️ Retrying download for file: ${s3Key} (Attempt ${i + 1}/3)`);
+              console.error('   ❌ Download failed with error:', e);
+              await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second
+            }
+          }
+
+          if (!downloadSuccess) {
+            console.error(`   ❌ CRITICAL: Failed to download file from GCP after 3 attempts. Skipping: ${s3Key}`);
+            return; // Skip this file to prevent data loss
+          }
+          
+          const bodyContent = (fileBuffer.length > 0) ? fileBuffer : Buffer.from('');
+          const contentType = file.metadata.contentType || 'application/octet-stream';
+
+          const uploadParams = {
+            Bucket: S3_BUCKET_NAME,
+            Key: s3Key,
+            Body: bodyContent,
+            ContentType: contentType,
+          };
+
+          await s3.send(new PutObjectCommand(uploadParams));
+
+          transferredCount++;
+          console.log(`   ✔️ File transferred (${transferredCount}/${totalFilesToTransfer}): ${s3Key}`);
+        });
+      });
+
+      await Promise.all(uploadPromises);
 
       migratedFoldersCount++;
       const remainingFolders = totalFoldersToMigrate - migratedFoldersCount;
-      console.log(`✅ Migration for folder '${folderName}' complete.`);
+      console.log(`✅ Migration for folder '${folderName}' complete. All files are now in sync.`);
       console.log(`✨ Folders migrated: ${migratedFoldersCount}/${totalFoldersToMigrate} (Remaining: ${remainingFolders})`);
     }
 
